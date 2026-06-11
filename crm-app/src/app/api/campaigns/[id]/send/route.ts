@@ -64,31 +64,81 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       data: { status: 'sent', sent_at: new Date() }
     });
 
-    // 5. Fire and forget: send to Channel Service
-    let channelSuccessCount = 0;
-    for (const rec of recipients) {
-      const cust = segmentCustomers.find(sc => sc.customer_id === rec.customer_id)?.customer;
-      if (!cust) continue;
+    // 5. Send to Channel Service with Batching, Retries, and Error Handling
+    const CHUNK_SIZE = 20;
+    const MAX_RETRIES = 3;
 
+    const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+    const sendWithRetry = async (rec: any, cust: any, attempt = 1): Promise<boolean> => {
       const contact = campaign.channel === 'email' ? cust.email : cust.phone;
+      
+      try {
+        const response = await fetch(`${CHANNEL_SERVICE_URL}/send`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            campaignId: campaign.id,
+            customerId: rec.customer_id,
+            recipient: contact,
+            channel: campaign.channel,
+            message: rec.personalized_message,
+            callbackUrl: CRM_CALLBACK_URL
+          })
+        });
 
-      fetch(`${CHANNEL_SERVICE_URL}/send`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          campaignId: campaign.id,
-          customerId: rec.customer_id,
-          recipient: contact,
-          channel: campaign.channel,
-          message: rec.personalized_message,
-          callbackUrl: CRM_CALLBACK_URL
-        })
-      })
-        .then(r => {
-          if (r.ok) channelSuccessCount++;
-          else console.warn(`[Send] Channel service non-OK for customer ${rec.customer_id}: ${r.status}`);
-        })
-        .catch(err => console.error(`[Send] Channel service unreachable for ${rec.customer_id}:`, err.message));
+        if (response.ok) return true;
+        
+        // Handle 5xx errors by retrying
+        if (response.status >= 500 && attempt <= MAX_RETRIES) {
+          console.warn(`[Send] Channel service 5xx for ${rec.customer_id}, attempt ${attempt}`);
+          throw new Error('Server Error');
+        }
+        
+        // 4xx errors are permanent failures
+        console.warn(`[Send] Permanent failure for ${rec.customer_id}: ${response.status}`);
+        return false;
+      } catch (err: any) {
+        if (attempt <= MAX_RETRIES) {
+          // Exponential backoff: 500ms, 1000ms, 2000ms
+          await sleep(500 * Math.pow(2, attempt - 1));
+          return sendWithRetry(rec, cust, attempt + 1);
+        }
+        console.error(`[Send] Exhausted retries for ${rec.customer_id}:`, err.message);
+        return false;
+      }
+    };
+
+    let channelSuccessCount = 0;
+    let failedCount = 0;
+
+    // Process in batches to prevent overwhelming the Node.js event loop or Channel Service
+    for (let i = 0; i < recipients.length; i += CHUNK_SIZE) {
+      const chunk = recipients.slice(i, i + CHUNK_SIZE);
+      
+      const batchPromises = chunk.map(async (rec) => {
+        const cust = segmentCustomers.find(sc => sc.customer_id === rec.customer_id)?.customer;
+        if (!cust) return false;
+        
+        const success = await sendWithRetry(rec, cust);
+        if (success) {
+          channelSuccessCount++;
+        } else {
+          failedCount++;
+          // Mark as failed in DB if permanently failed
+          await prisma.campaignRecipient.update({
+            where: {
+              campaign_id_customer_id: {
+                campaign_id: campaign.id,
+                customer_id: rec.customer_id
+              }
+            },
+            data: { status: 'failed', last_event_at: new Date() }
+          });
+        }
+      });
+
+      await Promise.all(batchPromises);
     }
 
     console.log(`[Send] Campaign ${campaignId} dispatched. ${recipients.length} recipients queued.`);
