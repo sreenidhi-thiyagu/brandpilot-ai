@@ -1,0 +1,107 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model Customer {
+  id                 String              @id @default(uuid())
+  name               String
+  email              String?
+  phone              String?
+  city               String?
+  gender             String?
+  age                Int?
+  total_spent        Float               @default(0)
+  last_purchase_date DateTime?
+  preferred_category String?
+  created_at         DateTime            @default(now())
+  
+  orders             Order[]
+  segmentCustomers   SegmentCustomer[]
+  campaignRecipients CampaignRecipient[]
+  communicationEvents CommunicationEvent[]
+}
+
+model Order {
+  id           String   @id @default(uuid())
+  customer_id  String
+  product_name String?
+  category     String?
+  order_value  Float?
+  order_date   DateTime?
+  created_at   DateTime @default(now())
+
+  customer Customer @relation(fields: [customer_id], references: [id], onDelete: Cascade)
+}
+
+model Segment {
+  id             String   @id @default(uuid())
+  name           String
+  description    String?
+  rules_json     String?  // Stored as stringified JSON in SQLite
+  created_by_ai  Boolean  @default(true)
+  customer_count Int      @default(0)
+  created_at     DateTime @default(now())
+
+  segmentCustomers SegmentCustomer[]
+  campaigns        Campaign[]
+}
+
+model SegmentCustomer {
+  id          String @id @default(uuid())
+  segment_id  String
+  customer_id String
+
+  segment  Segment  @relation(fields: [segment_id], references: [id], onDelete: Cascade)
+  customer Customer @relation(fields: [customer_id], references: [id], onDelete: Cascade)
+
+  @@unique([segment_id, customer_id])
+}
+
+model Campaign {
+  id               String   @id @default(uuid())
+  name             String
+  goal             String?
+  segment_id       String?
+  channel          String?
+  message_template String?
+  status           String   @default("draft")
+  sent_at          DateTime?
+  created_at       DateTime @default(now())
+
+  segment             Segment?             @relation(fields: [segment_id], references: [id], onDelete: SetNull)
+  campaignRecipients  CampaignRecipient[]
+  communicationEvents CommunicationEvent[]
+}
+
+model CampaignRecipient {
+  id                   String   @id @default(uuid())
+  campaign_id          String
+  customer_id          String
+  personalized_message String?
+  status               String   @default("pending")
+  last_event_at        DateTime?
+  created_at           DateTime @default(now())
+
+  campaign Campaign @relation(fields: [campaign_id], references: [id], onDelete: Cascade)
+  customer Customer @relation(fields: [customer_id], references: [id], onDelete: Cascade)
+
+  @@unique([campaign_id, customer_id])
+}
+
+model CommunicationEvent {
+  id          String   @id @default(uuid())
+  campaign_id String
+  customer_id String
+  event_type  String?
+  event_time  DateTime @default(now())
+  metadata    String?
+
+  campaign Campaign @relation(fields: [campaign_id], references: [id], onDelete: Cascade)
+  customer Customer @relation(fields: [customer_id], references: [id], onDelete: Cascade)
+}
