@@ -40,7 +40,7 @@ export async function POST() {
     await prisma.order.deleteMany();
     await prisma.customer.deleteMany();
 
-    // 2. Build customers in memory first (to pre-compute totals)
+    // 2. Build customers in memory
     const NUM_CUSTOMERS = 100;
     const NUM_ORDERS = 260;
 
@@ -55,7 +55,7 @@ export async function POST() {
         gender: randomChoice(GENDERS),
         age: randomInt(18, 60),
         preferred_category: randomChoice(CATEGORIES),
-        total_spent: 0,
+        total_spent: randomInt(500, 50000), // Assigned instantly to prevent Vercel timeout
         last_purchase_date: daysAgo(randomInt(1, 100)),
       };
     });
@@ -64,14 +64,12 @@ export async function POST() {
     await prisma.customer.createMany({ data: customerData });
     const customers = await prisma.customer.findMany({ select: { id: true } });
 
-    // 4. Build orders in memory — track spending per customer
-    const spendMap: Record<string, number> = {};
+    // 4. Build random orders
     const orderData = Array.from({ length: NUM_ORDERS }).map(() => {
       const customer = randomChoice(customers);
       const category = randomChoice(CATEGORIES);
       const productName = randomChoice(PRODUCTS[category]);
       const orderValue = randomInt(500, 5000);
-      spendMap[customer.id] = (spendMap[customer.id] || 0) + orderValue;
 
       return {
         customer_id: customer.id,
@@ -84,15 +82,6 @@ export async function POST() {
 
     // 5. Bulk insert orders
     await prisma.order.createMany({ data: orderData });
-
-    // 6. Update total_spent via a raw SQL loop (much faster than N individual queries)
-    // Prisma doesn't support bulk updateMany with different values per row without raw SQL.
-    // We use Promise.all to run all updates in parallel.
-    await Promise.all(
-      Object.entries(spendMap).map(([id, total]) =>
-        prisma.customer.update({ where: { id }, data: { total_spent: total } })
-      )
-    );
 
     console.log(`[Seed] Seeded ${NUM_CUSTOMERS} customers and ${NUM_ORDERS} orders`);
 

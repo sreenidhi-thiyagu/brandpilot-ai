@@ -58,10 +58,10 @@ Do not include markdown blocks or any other text. Only valid JSON.`;
 
     const where: any = {};
     if (rules.city) {
-      where.city = { contains: rules.city };
+      where.city = { contains: rules.city, mode: 'insensitive' };
     }
     if (rules.preferred_category) {
-      where.preferred_category = { contains: rules.preferred_category };
+      where.preferred_category = { contains: rules.preferred_category, mode: 'insensitive' };
     }
     if (rules.min_total_spent !== undefined) {
       where.total_spent = { gte: rules.min_total_spent };

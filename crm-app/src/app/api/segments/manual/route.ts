@@ -18,9 +18,9 @@ export async function POST(req: Request) {
 
       if (field === "city" || field === "preferred_category" || field === "gender") {
         if (operator === "equals") {
-          where[field] = value;
+          where[field] = { equals: value, mode: 'insensitive' };
         } else if (operator === "contains") {
-          where[field] = { contains: value };
+          where[field] = { contains: value, mode: 'insensitive' };
         }
       } else if (field === "age" || field === "total_spent") {
         const numValue = Number(value);
